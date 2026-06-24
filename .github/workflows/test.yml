@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install API dependencies
+        run: |
+          pip install -r src/api/requirements.txt
+          pip install pytest httpx
+
+      - name: Run API tests
+        working-directory: src/api
+        run: pytest tests/ -v --tb=short
+
+  producer-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install producer dependencies
+        run: |
+          pip install confluent-kafka pytest
+
+      - name: Run producer tests
+        working-directory: src/data_producer
+        run: pytest tests/ -v --tb=short
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_USE_MOCK: "true"
+        run: npx vite build
