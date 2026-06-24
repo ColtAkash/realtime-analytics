@@ -1,0 +1,29 @@
+{
+  "index_patterns": ["metrics-5m-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "metrics-ilm",
+      "index.lifecycle.rollover_alias": "metrics-5m"
+    },
+    "mappings": {
+      "properties": {
+        "event_type":         { "type": "keyword" },
+        "region":             { "type": "keyword" },
+        "window_start":       { "type": "date" },
+        "window_end":         { "type": "date" },
+        "event_count":        { "type": "integer" },
+        "avg_duration_ms":    { "type": "float" },
+        "purchase_total_usd": { "type": "float" },
+        "avg_amount_usd":     { "type": "float" },
+        "severity_info":      { "type": "integer" },
+        "severity_warning":   { "type": "integer" },
+        "severity_error":     { "type": "integer" },
+        "severity_critical":  { "type": "integer" },
+        "updated_at":         { "type": "date" }
+      }
+    }
+  }
+}

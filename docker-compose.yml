@@ -1,0 +1,122 @@
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    hostname: zookeeper
+    container_name: ra-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: ra-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  cassandra:
+    image: cassandra:4.1
+    hostname: cassandra
+    container_name: ra-cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: ra-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 100M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    hostname: elasticsearch
+    container_name: ra-elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    container_name: ra-redis
+    ports:
+      - "6379:6379"
+
+  producer:
+    build:
+      context: ./src/data_producer
+    container_name: ra-producer
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: events
+      EVENT_RATE_PER_SEC: 100
+
+  api:
+    build:
+      context: ./src/api
+    container_name: ra-api
+    depends_on:
+      - cassandra
+      - elasticsearch
+      - redis
+    ports:
+      - "8000:8000"
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      CASSANDRA_KEYSPACE: analytics
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      REDIS_URL: redis://redis:6379/0
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+
+  spark-job:
+    build:
+      context: ./src/spark_jobs
+    container_name: ra-spark-job
+    depends_on:
+      - kafka
+      - cassandra
+      - elasticsearch
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: events
+      KAFKA_DLQ_TOPIC: events_dlq
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      CASSANDRA_KEYSPACE: analytics
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ES_INDEX_ALIAS: metrics-5m
+      CHECKPOINT_DIR: /tmp/spark-checkpoint
+      TRIGGER_INTERVAL: "30 seconds"
+    volumes:
+      - spark-checkpoint:/tmp/spark-checkpoint
+
+volumes:
+  spark-checkpoint:
+  cassandra-data:
+  elasticsearch-data:
