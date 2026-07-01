@@ -1,7 +1,8 @@
-"""PySpark Structured Streaming job: Kafka → aggregate → Cassandra."""
-import json
+"""PySpark Structured Streaming job: Kafka → aggregate → Cassandra + Elasticsearch."""
+import base64
 import logging
 import os
+from urllib.parse import urlparse
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
@@ -28,16 +29,41 @@ ES_INDEX_ALIAS = os.environ.get("ES_INDEX_ALIAS", "metrics-5m")
 CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/tmp/spark-checkpoint")
 TRIGGER_INTERVAL = os.environ.get("TRIGGER_INTERVAL", "30 seconds")
 
+ASTRA_BUNDLE_B64 = os.environ.get("ASTRA_SECURE_BUNDLE_B64", "")
+ASTRA_CLIENT_ID = os.environ.get("ASTRA_CLIENT_ID", "")
+ASTRA_CLIENT_SECRET = os.environ.get("ASTRA_CLIENT_SECRET", "")
+
+
+def _astra_bundle_path() -> str:
+    path = "/tmp/astra-secure-connect.zip"
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(ASTRA_BUNDLE_B64))
+    return path
+
 
 def create_spark_session() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder
         .appName("realtime-analytics-aggregator")
-        .config("spark.cassandra.connection.host", CASSANDRA_HOST)
-        .config("spark.cassandra.connection.port", CASSANDRA_PORT)
         .config("spark.sql.streaming.stateStore.stateSchemaCheck", "false")
-        .getOrCreate()
     )
+
+    if ASTRA_BUNDLE_B64:
+        log.info("configuring Spark for Astra DB")
+        builder = (
+            builder
+            .config("spark.cassandra.connection.config.cloud.path", _astra_bundle_path())
+            .config("spark.cassandra.auth.username", ASTRA_CLIENT_ID)
+            .config("spark.cassandra.auth.password", ASTRA_CLIENT_SECRET)
+        )
+    else:
+        builder = (
+            builder
+            .config("spark.cassandra.connection.host", CASSANDRA_HOST)
+            .config("spark.cassandra.connection.port", CASSANDRA_PORT)
+        )
+
+    return builder.getOrCreate()
 
 
 def _write_cassandra(df: DataFrame, table: str) -> None:
@@ -51,14 +77,30 @@ def _write_cassandra(df: DataFrame, table: str) -> None:
 
 
 def _write_elasticsearch(df: DataFrame) -> None:
+    parsed = urlparse(ELASTICSEARCH_URL)
+    # Strip auth from the node address
+    host = parsed.hostname or "elasticsearch"
+    port = parsed.port or (443 if parsed.scheme == "https" else 9200)
+    es_nodes = f"{host}:{port}"
+
+    opts = {
+        "es.resource": ES_INDEX_ALIAS,
+        "es.nodes": es_nodes,
+        "es.nodes.wan.only": "true",
+        "es.write.operation": "index",
+        "es.mapping.date.rich": "false",
+        "es.net.ssl": "true" if parsed.scheme == "https" else "false",
+        "es.net.ssl.cert.allow.self.signed": "true",
+    }
+
+    if parsed.username:
+        opts["es.net.http.auth.user"] = parsed.username
+        opts["es.net.http.auth.pass"] = parsed.password or ""
+
     (
         df.write
         .format("org.elasticsearch.spark.sql")
-        .option("es.resource", ES_INDEX_ALIAS)
-        .option("es.nodes", ELASTICSEARCH_URL.replace("http://", ""))
-        .option("es.nodes.wan.only", "true")
-        .option("es.write.operation", "index")
-        .option("es.mapping.date.rich", "false")
+        .options(**opts)
         .mode("append")
         .save()
     )
@@ -121,7 +163,6 @@ def main() -> None:
     parsed = parse_json(raw)
     valid, invalid = split_valid_invalid(parsed)
 
-    # 5-min aggregation stream → Cassandra
     agg_5min_query = (
         build_aggregates_5min(valid)
         .writeStream
@@ -133,7 +174,6 @@ def main() -> None:
         .start()
     )
 
-    # 15-min aggregation stream → Cassandra
     agg_15min_query = (
         build_aggregates_15min(valid)
         .writeStream
@@ -145,7 +185,6 @@ def main() -> None:
         .start()
     )
 
-    # Dead-letter stream → Kafka DLQ topic
     dlq_query = (
         invalid
         .writeStream

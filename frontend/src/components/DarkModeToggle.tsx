@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 
 export default function DarkModeToggle() {
-  const [dark, setDark] = useState(() =>
-    document.documentElement.classList.contains("dark")
-  );
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem("dark-mode");
+    return saved !== null ? saved === "true" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("dark-mode", String(dark));
   }, [dark]);
 
   return (

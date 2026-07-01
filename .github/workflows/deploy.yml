@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -29,48 +32,46 @@ jobs:
         with:
           context: src/api
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:${{ github.sha }}
 
       - name: Build and push Producer image
         uses: docker/build-push-action@v5
         with:
           context: src/data_producer
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/producer:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/producer:${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/producer:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/producer:${{ github.sha }}
 
       - name: Build and push Spark job image
         uses: docker/build-push-action@v5
         with:
           context: src/spark_jobs
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/spark-job:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/spark-job:${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/spark-job:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/spark-job:${{ github.sha }}
 
   deploy-api:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: vars.EC2_DEPLOY_ENABLED == 'true'
     steps:
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:latest
-            docker stop ra-api 2>/dev/null || true
-            docker rm ra-api 2>/dev/null || true
-            docker run -d --name ra-api \
-              -p 8000:8000 \
-              -e CASSANDRA_HOST=${{ secrets.CASSANDRA_HOST }} \
-              -e ELASTICSEARCH_URL=${{ secrets.ELASTICSEARCH_URL }} \
-              -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }} \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/api:latest
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy API to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service ${{ vars.RAILWAY_SERVICE_NAME }} --detach
 
       - name: Smoke test
         run: |
-          sleep 10
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://${{ secrets.EC2_HOST }}:8000/health)
+          sleep 15
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" ${{ secrets.RAILWAY_API_URL }}/health)
           if [ "$STATUS" != "200" ]; then
             echo "Smoke test failed: HTTP $STATUS"
             exit 1
@@ -78,27 +79,30 @@ jobs:
           echo "Smoke test passed: HTTP 200"
 
   deploy-frontend:
-    needs: build-and-push
+    needs: deploy-api
     runs-on: ubuntu-latest
-    if: vars.VERCEL_DEPLOY_ENABLED == 'true'
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install and build
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          VITE_WS_URL: ${{ secrets.WS_URL }}
+          VITE_API_BASE_URL: ${{ secrets.RAILWAY_API_URL }}
+          VITE_WS_URL: ${{ secrets.RAILWAY_WS_URL }}
         run: |
           npm install
           npx vite build
 
       - name: Deploy to Vercel
         working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           npm i -g vercel
-          vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }} --yes
+          vercel deploy --prod --token=$VERCEL_TOKEN --yes

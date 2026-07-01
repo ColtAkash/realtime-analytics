@@ -16,6 +16,10 @@ INDEX_ALIAS = os.environ.get("ES_INDEX_ALIAS", "metrics-5m")
 _client: Elasticsearch | None = None
 
 
+def _dt(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def get_client() -> Elasticsearch:
     global _client
     if _client is None:
@@ -42,7 +46,7 @@ def timeseries(
     es = get_client()
 
     filters: list[dict] = [
-        {"range": {"window_start": {"gte": start.isoformat(), "lte": end.isoformat()}}},
+        {"range": {"window_start": {"gte": _dt(start), "lte": _dt(end)}}},
     ]
     if event_type:
         filters.append({"term": {"event_type": event_type}})
@@ -92,7 +96,7 @@ def top_n(
         "query": {
             "bool": {
                 "filter": [
-                    {"range": {"window_start": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                    {"range": {"window_start": {"gte": _dt(start), "lte": _dt(now)}}},
                 ],
             }
         },
@@ -118,7 +122,7 @@ def current_stats() -> dict[str, Any]:
 
     body: dict[str, Any] = {
         "size": 0,
-        "query": {"bool": {"filter": [{"range": {"window_start": {"gte": cutoff.isoformat()}}}]}},
+        "query": {"bool": {"filter": [{"range": {"window_start": {"gte": _dt(cutoff)}}}]}},
         "aggs": {
             "by_type": {
                 "terms": {"field": "event_type", "size": 10},
