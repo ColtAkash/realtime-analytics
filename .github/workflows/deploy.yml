@@ -67,13 +67,7 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-        run: |
-          SERVICE="${{ vars.RAILWAY_SERVICE_NAME }}"
-          if [ -n "$SERVICE" ]; then
-            railway up --service "$SERVICE" --detach
-          else
-            railway up --detach
-          fi
+        run: railway up --service ${{ secrets.RAILWAY_SERVICE_NAME }} --detach
 
       - name: Smoke test
         run: |
