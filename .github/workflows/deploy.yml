@@ -66,11 +66,18 @@ jobs:
       - name: Deploy API to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --service ${{ vars.RAILWAY_SERVICE_NAME }} --detach
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          SERVICE="${{ vars.RAILWAY_SERVICE_NAME }}"
+          if [ -n "$SERVICE" ]; then
+            railway up --service "$SERVICE" --detach
+          else
+            railway up --detach
+          fi
 
       - name: Smoke test
         run: |
-          sleep 15
+          sleep 30
           STATUS=$(curl -sf -o /dev/null -w "%{http_code}" ${{ secrets.RAILWAY_API_URL }}/health)
           if [ "$STATUS" != "200" ]; then
             echo "Smoke test failed: HTTP $STATUS"
